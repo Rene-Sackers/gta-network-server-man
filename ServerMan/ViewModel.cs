@@ -103,8 +103,6 @@ namespace ServerMan
                 {
                     return;
                 }
-
-                await Task.Delay(100);
             }
         }
 
