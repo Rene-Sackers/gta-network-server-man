@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System;
+using System.Linq;
+using ServerMan.Unsafe;
 
 namespace ServerMan
 {
@@ -17,6 +19,7 @@ namespace ServerMan
         public RelayCommand RestartClickedCommand { get; private set; }
         public RelayCommand StopClickedCommand { get; private set; }
 
+        public bool IsRunning => _serverProcess != null && !_serverProcess.HasExited && !_isShuttingDownServer;
 
         public string ServerOutput
         {
@@ -26,30 +29,32 @@ namespace ServerMan
 
 
         public event PropertyChangedEventHandler PropertyChanged;
-
-
-        private bool _isRunning => _serverProcess != null && !_serverProcess.HasExited;
-
-        private bool _validServerPathSelected => !string.IsNullOrWhiteSpace(_selectedServerExecutablepath) && File.Exists(_selectedServerExecutablepath);
+        
+        private bool ValidServerPathSelected => !string.IsNullOrWhiteSpace(_selectedServerExecutablepath) && File.Exists(_selectedServerExecutablepath);
 
 
         private string _serverOutput;
         private Process _serverProcess;
         private string _selectedServerExecutablepath;
+        private bool _isShuttingDownServer;
 
         public ViewModel()
         {
-            BrowseClickedCommand = new RelayCommand(BrowseClicked, (obj) => !_isRunning);
-            StartClickedCommand = new RelayCommand(StartClicked, (obj) => !_isRunning && _validServerPathSelected);
-            RestartClickedCommand = new RelayCommand(RestartClicked, (obj) => _isRunning);
-            StopClickedCommand = new RelayCommand(StopClicked, (obj) => _isRunning);
+            var serverFileInDirectory = Directory.GetFiles(Directory.GetCurrentDirectory(), "GTANetworkServer.exe");
+
+            _selectedServerExecutablepath = serverFileInDirectory.FirstOrDefault();
+
+            BrowseClickedCommand = new RelayCommand(BrowseClicked, obj => !IsRunning);
+            StartClickedCommand = new RelayCommand(StartClicked, obj => !IsRunning && ValidServerPathSelected);
+            RestartClickedCommand = new RelayCommand(RestartClicked, obj => IsRunning);
+            StopClickedCommand = new RelayCommand(StopClicked, obj => IsRunning);
 
             Application.Current.Exit += ApplicationExit;
         }
 
         private void BrowseClicked(object obj)
         {
-            var openFileDialog = new OpenFileDialog()
+            var openFileDialog = new OpenFileDialog
             {
                 Filter = "GTANetworkServer.exe|GTANetworkServer.exe"
             };
@@ -69,17 +74,21 @@ namespace ServerMan
 
         private void StartServer()
         {
-            if (_isRunning) return;
+            if (IsRunning) return;
 
             ServerOutput = "";
 
             var serverDirectory = Path.GetDirectoryName(_selectedServerExecutablepath);
 
-            _serverProcess = new Process {
-                StartInfo = new ProcessStartInfo(_selectedServerExecutablepath) {
+            if (serverDirectory == null) return;
+
+            _serverProcess = new Process
+            {
+                StartInfo = new ProcessStartInfo(_selectedServerExecutablepath)
+                {
                     WorkingDirectory = serverDirectory,
                     RedirectStandardOutput = true,
-                    RedirectStandardInput = true,
+                    RedirectStandardInput = false,
                     UseShellExecute = false,
                     CreateNoWindow = true
                 }
@@ -106,21 +115,46 @@ namespace ServerMan
             }
         }
 
-        private void StopServer()
+        private async Task StopServer()
         {
-            if (!_isRunning) return;
-            
-            _serverProcess.StandardInput.WriteLine("\x3");
-            _serverProcess.StandardInput.Flush();
-            _serverProcess.WaitForExit(1000);
+            if (!IsRunning || _isShuttingDownServer) return;
 
+            _isShuttingDownServer = true;
+
+            ServerOutput += "Sending shutdown event." + Environment.NewLine;
+
+            await ShutDownConsoleProcess(_serverProcess);
+
+            if (_serverProcess == null) return;
             if (!_serverProcess.HasExited) _serverProcess.Kill();
 
             _serverProcess.Close();
             _serverProcess.Dispose();
             _serverProcess = null;
 
-            ServerOutput += "Server stopped.";
+            NotifyPropertyChanged(nameof(IsRunning));
+
+            ServerOutput += "Server stopped." + Environment.NewLine;
+
+            _isShuttingDownServer = false;
+        }
+
+        private static async Task ShutDownConsoleProcess(Process process)
+        {
+            if (ConsoleHandlingImports.AttachConsole((uint)process.Id))
+            {
+                ConsoleHandlingImports.SetConsoleCtrlHandler(null, true);
+                try
+                {
+                    ConsoleHandlingImports.GenerateConsoleCtrlEvent(ConsoleHandlingImports.CTRL_C_EVENT, 0);
+                    await Task.Factory.StartNew(process.WaitForExit);
+                }
+                finally
+                {
+                    ConsoleHandlingImports.FreeConsole();
+                    ConsoleHandlingImports.SetConsoleCtrlHandler(null, false);
+                }
+            }
         }
 
         private void StartClicked(object obj)
@@ -128,15 +162,15 @@ namespace ServerMan
             StartServer();
         }
 
-        private void RestartClicked(object obj)
+        private async void RestartClicked(object obj)
         {
-            StopServer();
+            await StopServer();
             StartServer();
         }
 
-        private void StopClicked(object obj)
+        private async void StopClicked(object obj)
         {
-            StopServer();
+            await StopServer();
         }
 
         private void NotifyPropertyChanged([CallerMemberName] string propertyName = null)
@@ -144,9 +178,9 @@ namespace ServerMan
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 
-        private void ApplicationExit(object sender, ExitEventArgs e)
+        private async void ApplicationExit(object sender, ExitEventArgs e)
         {
-            StopServer();
+            await StopServer();
         }
     }
 }

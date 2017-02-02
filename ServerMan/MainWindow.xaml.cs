@@ -1,12 +1,11 @@
-﻿using System.Windows;
-using System.Windows.Controls;
+﻿using System.Windows.Controls;
 
 namespace ServerMan
 {
     /// <summary>
     /// Interaction logic for MainWindow.xaml
     /// </summary>
-    public partial class MainWindow : Window
+    public partial class MainWindow
     {
         public MainWindow()
         {
@@ -16,9 +15,8 @@ namespace ServerMan
         private void LogTextChanged(object sender, TextChangedEventArgs e)
         {
             var textBox = sender as TextBox;
-            if (textBox == null) return;
 
-            textBox.ScrollToEnd();
+            textBox?.ScrollToEnd();
         }
     }
 }
